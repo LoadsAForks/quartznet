@@ -441,7 +441,14 @@ public sealed class QuartzScheduler
                 var jobs = GetCurrentlyExecutingJobs().OfType<ICancellableJobExecutionContext>();
                 foreach (var job in jobs)
                 {
-                    job.Cancel();
+                    try
+                    {
+                        job.Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+
+                    }
                 }
             }
 
