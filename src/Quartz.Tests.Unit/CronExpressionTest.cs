@@ -178,7 +178,8 @@ public class CronExpressionTest : SerializationTestSupport<CronExpression>
     public void CanUse_DayOfMonth_And_DayOfWeek_Together(string cronExpression, int[] expectedDays, string scenario = "")
     {
         var expr = new CronExpression(cronExpression);
-        var templateDate = new DateTime(2010, 10, 1, 10, 15, 0).ToUniversalTime();
+        expr.TimeZone = TimeZoneInfo.Utc;
+        var templateDate = new DateTime(2010, 10, 1, 10, 15, 0, DateTimeKind.Utc);
 
         foreach (var day in expectedDays)
         {
@@ -942,13 +943,7 @@ public class CronExpressionTest : SerializationTestSupport<CronExpression>
         Console.WriteLine("{0}ms", sw.ElapsedMilliseconds);
     }
 
-    [Test]
-    public void GetTimeBefore_IsNotImplement_AndAlwaysReturnsNull()
-    {
-        CronExpression expression = new CronExpression("0 15 15 5 11 ?");
-        var sut = expression.GetTimeBefore(new DateTimeOffset(2010, 12, 1, 1, 1, 1, TimeSpan.Zero));
-        sut.Should().Be(null);
-    }
+
 
     [Test]
     public void GetFinalFireTime_IsNotImplement_AndAlwaysReturnsNull()
