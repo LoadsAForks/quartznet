@@ -82,6 +82,9 @@
     <!-- CA1507: Use nameof in place of string literal -->
     <NoWarn>$(NoWarn);CA1507</NoWarn>
 
+    <!-- CA1873: Evaluation of this argument may be expensive and unnecessary if logging is disabled -->
+    <NoWarn>$(NoWarn);CA1873</NoWarn>
+
   </PropertyGroup>
 
 </Project>
