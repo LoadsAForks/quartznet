@@ -1228,7 +1228,15 @@ public abstract class JobStoreSupport : AdoConstants, IJobStore
         TriggerKey key,
         CancellationToken cancellationToken)
     {
-        return await Delegate.DeleteTrigger(conn, key, cancellationToken).ConfigureAwait(false) > 0;
+        bool deleted = await Delegate.DeleteTrigger(conn, key, cancellationToken).ConfigureAwait(false) > 0;
+        
+        // Also clean up any fired trigger records to prevent recovery triggers from being created
+        if (deleted)
+        {
+            await Delegate.DeleteFiredTriggers(conn, key, cancellationToken).ConfigureAwait(false);
+        }
+        
+        return deleted;
     }
 
     /// <summary>
