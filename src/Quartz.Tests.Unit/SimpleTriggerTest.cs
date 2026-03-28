@@ -241,4 +241,65 @@ public class SimpleTriggerTest : SerializationTestSupport<SimpleTriggerImpl>
         var instruction = trigger.ExecutionComplete(A.Fake<IJobExecutionContext>(), new JobExecutionException());
         Assert.That(instruction, Is.EqualTo(SchedulerInstruction.DeleteTrigger));
     }
+
+    [Test]
+    public void RescheduleNextWithExistingCount_WithMisfireThreshold_PreservesWithinThresholdFireTime()
+    {
+        var startTime = new DateTimeOffset(2025, 1, 1, 10, 0, 0, TimeSpan.Zero);
+        var frozenNow = new DateTimeOffset(2025, 1, 1, 10, 2, 30, TimeSpan.Zero);
+        var threshold = TimeSpan.FromSeconds(60);
+
+        var trigger = new SimpleTriggerImpl(new FixedTimeProvider(frozenNow))
+        {
+            Key = new TriggerKey("test", "test"),
+            StartTimeUtc = startTime,
+            RepeatInterval = TimeSpan.FromMinutes(2),
+            RepeatCount = SimpleTriggerImpl.RepeatIndefinitely,
+            MisfireInstruction = MisfireInstruction.SimpleTrigger.RescheduleNextWithExistingCount
+        };
+        trigger.ComputeFirstFireTimeUtc(null);
+
+        trigger.UpdateAfterMisfire(null, threshold);
+
+        DateTimeOffset? nextFire = trigger.GetNextFireTimeUtc();
+        Assert.IsNotNull(nextFire);
+        Assert.That(nextFire.Value, Is.EqualTo(new DateTimeOffset(2025, 1, 1, 10, 2, 0, TimeSpan.Zero)),
+            "Should preserve the 10:02 fire time that is within the misfire threshold");
+    }
+
+    [Test]
+    public void RescheduleNextWithRemainingCount_WithMisfireThreshold_PreservesWithinThresholdFireTime()
+    {
+        var startTime = new DateTimeOffset(2025, 1, 1, 10, 0, 0, TimeSpan.Zero);
+        var frozenNow = new DateTimeOffset(2025, 1, 1, 10, 2, 30, TimeSpan.Zero);
+        var threshold = TimeSpan.FromSeconds(60);
+
+        var trigger = new SimpleTriggerImpl(new FixedTimeProvider(frozenNow))
+        {
+            Key = new TriggerKey("test", "test"),
+            StartTimeUtc = startTime,
+            RepeatInterval = TimeSpan.FromMinutes(2),
+            RepeatCount = 10,
+            MisfireInstruction = MisfireInstruction.SimpleTrigger.RescheduleNextWithRemainingCount
+        };
+        trigger.ComputeFirstFireTimeUtc(null);
+
+        // Simulate that the trigger has already fired once at 10:00:00
+        trigger.SetNextFireTimeUtc(startTime);
+        trigger.TimesTriggered = 1;
+
+        trigger.UpdateAfterMisfire(null, threshold);
+
+        DateTimeOffset? nextFire = trigger.GetNextFireTimeUtc();
+        Assert.IsNotNull(nextFire);
+        Assert.That(nextFire.Value, Is.EqualTo(new DateTimeOffset(2025, 1, 1, 10, 2, 0, TimeSpan.Zero)),
+            "Should preserve the 10:02 fire time that is within the misfire threshold");
+        // Only 1 fire time missed (10:00 -> 10:02), not 2 (10:00 -> 10:04)
+        Assert.That(trigger.TimesTriggered, Is.EqualTo(2));
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
 }
