@@ -42,6 +42,9 @@
     "sass-embedded": "^1.97.3"
   },
   "overrides": {
-    "serialize-javascript": "^7.0.3"
+    "serialize-javascript": "^7.0.5",
+    "path-to-regexp": "^0.1.13",
+    "picomatch@^2": "^2.3.2",
+    "picomatch@^4": "^4.0.4"
   }
 }
