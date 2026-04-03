@@ -49,7 +49,7 @@ public class JobDataMapTest : SerializationTestSupport<JobDataMap>
     protected override JobDataMap GetTargetObject()
     {
         JobDataMap m = new JobDataMap();
-        m.Put("key", 5);
+        m["key"] = 5;
         return m;
     }
 
@@ -58,7 +58,7 @@ public class JobDataMapTest : SerializationTestSupport<JobDataMap>
         using (new AssertionScope())
         {
             deserialized.Should().NotBeNull();
-            deserialized.WrappedMap.Should().BeEquivalentTo(original.WrappedMap);
+            ((IDictionary<string, object>) deserialized).Should().BeEquivalentTo((IDictionary<string, object>) original);
             deserialized.Dirty.Should().BeFalse("should not be dirty when returning from serialization");
         }
     }
