@@ -154,7 +154,8 @@ public sealed class QuartzApiClient : IQuartzApiClient
             JsonElement key = GetOptionalProperty(trigger, "key");
             string triggerName = GetStringProperty(key, "name");
             string triggerGroup = GetStringProperty(key, "group");
-            result.Add(new TriggerHeaderDto(triggerGroup, triggerName));
+            string? executionGroup = GetNullableStringProperty(trigger, "executionGroup");
+            result.Add(new TriggerHeaderDto(triggerGroup, triggerName, executionGroup));
         }
 
         return result;
@@ -179,6 +180,7 @@ public sealed class QuartzApiClient : IQuartzApiClient
             JsonElement triggerKey = GetOptionalProperty(trigger, "key");
             string triggerName = GetStringProperty(triggerKey, "name");
             string triggerGroup = GetStringProperty(triggerKey, "group");
+            string? executionGroup = GetNullableStringProperty(trigger, "executionGroup");
 
             DateTimeOffset fireTimeUtc = GetDateTimeOffsetProperty(item, "fireTime");
             string? fireInstanceId = GetNullableStringProperty(item, "fireInstanceId");
@@ -187,7 +189,8 @@ public sealed class QuartzApiClient : IQuartzApiClient
                 JobKey: new JobKeyDto(jobGroup, jobName),
                 TriggerKey: new TriggerKeyDto(triggerGroup, triggerName),
                 FireTimeUtc: fireTimeUtc,
-                FireInstanceId: fireInstanceId));
+                FireInstanceId: fireInstanceId,
+                ExecutionGroup: executionGroup));
         }
 
         return result;
@@ -239,7 +242,7 @@ public sealed class QuartzApiClient : IQuartzApiClient
         return PostAsync($"{GetSchedulerPath(schedulerName)}/jobs", request);
     }
 
-    public async ValueTask<List<TriggerKeyDto>> GetTriggerKeys(string schedulerName, string? groupFilter = null)
+    public async ValueTask<List<TriggerHeaderDto>> GetTriggerKeys(string schedulerName, string? groupFilter = null)
     {
         string path = $"{GetSchedulerPath(schedulerName)}/triggers";
         if (!string.IsNullOrWhiteSpace(groupFilter))
@@ -253,12 +256,13 @@ public sealed class QuartzApiClient : IQuartzApiClient
             return [];
         }
 
-        List<TriggerKeyDto> result = [];
+        List<TriggerHeaderDto> result = [];
         foreach (JsonElement key in json.EnumerateArray())
         {
             string name = GetStringProperty(key, "name");
             string group = GetStringProperty(key, "group");
-            result.Add(new TriggerKeyDto(group, name));
+            string? executionGroup = GetNullableStringProperty(key, "executionGroup");
+            result.Add(new TriggerHeaderDto(group, name, executionGroup));
         }
 
         return result;
@@ -631,5 +635,32 @@ public sealed class QuartzApiClient : IQuartzApiClient
         }
 
         return value.Clone();
+    }
+
+    public async ValueTask<ExecutionLimitsDto?> GetExecutionLimits(string schedulerName)
+    {
+        using System.Net.Http.HttpClient client = CreateClient();
+        string url = $"{GetSchedulerPath(schedulerName)}/execution-limits";
+        using HttpResponseMessage response = await client.GetAsync(url).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        JsonElement json = await ParseJsonAsync(response).ConfigureAwait(false);
+        if (!json.TryGetProperty("limits", out JsonElement limitsElement) || limitsElement.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        Dictionary<string, int?> dict = new();
+        foreach (JsonProperty prop in limitsElement.EnumerateObject())
+        {
+            string key = prop.Name is "" or "_" ? "(default)" : prop.Name;
+            dict[key] = prop.Value.ValueKind == JsonValueKind.Null ? null : prop.Value.GetInt32();
+        }
+
+        return dict.Count > 0 ? new ExecutionLimitsDto(dict) : null;
     }
 }

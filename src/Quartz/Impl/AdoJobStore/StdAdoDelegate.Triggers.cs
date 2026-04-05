@@ -354,6 +354,9 @@ public partial class StdAdoDelegate
 
         AddCommandParameter(cmd, "triggerPriority", trigger.Priority);
 
+        string? execGroup = trigger.ExecutionGroup;
+        AddCommandParameter(cmd, "triggerExecutionGroup", (object?) execGroup ?? DBNull.Value);
+
         int insertResult = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
         if (tDel is null)
@@ -402,7 +405,7 @@ public partial class StdAdoDelegate
         var updateJobData = trigger.JobDataMap.Dirty;
         var jobData = updateJobData ? SerializeJobData(trigger.JobDataMap) : null;
 
-        var sqlUpdate = updateJobData ? SqlUpdateTrigger : SqlUpdateTriggerSkipData;
+        string sqlUpdate = updateJobData ? SqlUpdateTrigger : SqlUpdateTriggerSkipData;
         using var cmd = PrepareCommand(conn, ReplaceTablePrefix(sqlUpdate));
 
         AddCommandParameter(cmd, "schedulerName", schedName);
@@ -434,14 +437,13 @@ public partial class StdAdoDelegate
         if (updateJobData)
         {
             AddCommandParameter(cmd, JobDataMapParameter, jobData, DbProvider.Metadata.DbBinaryType);
-            AddCommandParameter(cmd, "triggerName", trigger.Key.Name);
-            AddCommandParameter(cmd, "triggerGroup", trigger.Key.Group);
         }
-        else
-        {
-            AddCommandParameter(cmd, "triggerName", trigger.Key.Name);
-            AddCommandParameter(cmd, "triggerGroup", trigger.Key.Group);
-        }
+
+        string? execGroup = trigger.ExecutionGroup;
+        AddCommandParameter(cmd, "triggerExecutionGroup", (object?) execGroup ?? DBNull.Value);
+
+        AddCommandParameter(cmd, "triggerName", trigger.Key.Name);
+        AddCommandParameter(cmd, "triggerGroup", trigger.Key.Group);
 
         var updateResult = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
@@ -715,6 +717,7 @@ public partial class StdAdoDelegate
         DateTimeOffset startTimeUtc;
         DateTimeOffset? endTimeUtc;
         DateTimeOffset? misfireOrigFireTime;
+        string? executionGroup;
 
         ITriggerPersistenceDelegate? tDel = null;
         TriggerPropertyBundle? triggerProps = null;
@@ -755,6 +758,9 @@ public partial class StdAdoDelegate
                 }
 
                 misfireOrigFireTime = GetDateTimeFromDbValue(rs[ColumnMisfireOriginalFireTime]);
+
+                int execGroupOrdinal = rs.GetOrdinal(ColumnExecutionGroup);
+                executionGroup = rs.IsDBNull(execGroupOrdinal) ? null : rs.GetString(execGroupOrdinal);
             }
         }
 
@@ -843,6 +849,11 @@ public partial class StdAdoDelegate
             }
 
             SetTriggerStateProperties(trigger, triggerProps);
+        }
+
+        if (trigger is not null)
+        {
+            trigger.ExecutionGroup = executionGroup;
         }
 
         return trigger;
@@ -1154,6 +1165,7 @@ public partial class StdAdoDelegate
 
         using var rs = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         // signal cancel, otherwise ADO.NET might have trouble handling partial reads from open reader
+        int execGroupOrdinal = -1;
         var shouldStop = false;
         while (await rs.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -1163,12 +1175,19 @@ public partial class StdAdoDelegate
                 break;
             }
 
+            if (execGroupOrdinal < 0)
+            {
+                execGroupOrdinal = rs.GetOrdinal(ColumnExecutionGroup);
+            }
+
             if (nextTriggers.Count < maxCount)
             {
+                string? executionGroup = rs.IsDBNull(execGroupOrdinal) ? null : rs.GetString(execGroupOrdinal);
                 var result = new TriggerAcquireResult(
                     (string) rs[ColumnTriggerName],
                     (string) rs[ColumnTriggerGroup],
-                    (string) rs[ColumnJobClass]);
+                    (string) rs[ColumnJobClass],
+                    executionGroup);
                 nextTriggers.Add(result);
             }
             else
@@ -1184,6 +1203,77 @@ public partial class StdAdoDelegate
     {
         // by default we don't support limits, this is db specific
         return SqlSelectNextTriggerToAcquire;
+    }
+
+    /// <inheritdoc />
+    public virtual async ValueTask<List<TriggerAcquireResult>> SelectTriggerToAcquire(
+        ConnectionAndTransactionHolder conn,
+        DateTimeOffset noLaterThan,
+        DateTimeOffset noEarlierThan,
+        int maxCount,
+        Dictionary<string, int?> executionLimits,
+        CancellationToken cancellationToken = default)
+    {
+        if (maxCount < 1)
+        {
+            maxCount = 1;
+        }
+
+        string sql = GetSelectNextTriggerToAcquireSql(maxCount);
+
+        using var cmd = PrepareCommand(conn, ReplaceTablePrefix(sql));
+        List<TriggerAcquireResult> nextTriggers = new();
+
+        AddCommandParameter(cmd, "schedulerName", schedName);
+        AddCommandParameter(cmd, "state", StateWaiting);
+        AddCommandParameter(cmd, "noLaterThan", GetDbDateTimeValue(noLaterThan));
+        AddCommandParameter(cmd, "noEarlierThan", GetDbDateTimeValue(noEarlierThan));
+
+        // Create a working copy to decrement during iteration
+        Dictionary<string, int?> limitsWorkingCopy = new(executionLimits, StringComparer.Ordinal);
+
+        using var rs = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        int execGroupOrdinal = -1;
+        var shouldStop = false;
+        while (await rs.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (shouldStop)
+            {
+                cmd.Cancel();
+                break;
+            }
+
+            if (execGroupOrdinal < 0)
+            {
+                execGroupOrdinal = rs.GetOrdinal(ColumnExecutionGroup);
+            }
+
+            if (nextTriggers.Count < maxCount)
+            {
+                string? executionGroup = rs.IsDBNull(execGroupOrdinal)
+                    ? null
+                    : rs.GetString(execGroupOrdinal);
+
+                // Check execution limits
+                if (!ExecutionLimits.CheckExecutionLimits(executionGroup, limitsWorkingCopy))
+                {
+                    continue; // skip this trigger, its group is at limit
+                }
+
+                var result = new TriggerAcquireResult(
+                    (string) rs[ColumnTriggerName],
+                    (string) rs[ColumnTriggerGroup],
+                    (string) rs[ColumnJobClass],
+                    executionGroup);
+                nextTriggers.Add(result);
+            }
+            else
+            {
+                shouldStop = true;
+            }
+        }
+
+        return nextTriggers;
     }
 
     /// <inheritdoc />

@@ -150,7 +150,7 @@ public sealed class InProcessQuartzApiClient : IQuartzApiClient
         List<TriggerHeaderDto> result = [];
         foreach (ITrigger trigger in triggers)
         {
-            result.Add(new TriggerHeaderDto(trigger.Key.Group, trigger.Key.Name));
+            result.Add(new TriggerHeaderDto(trigger.Key.Group, trigger.Key.Name, trigger.ExecutionGroup));
         }
 
         return result;
@@ -169,7 +169,8 @@ public sealed class InProcessQuartzApiClient : IQuartzApiClient
                     JobKey: new JobKeyDto(jobExecutionContext.JobDetail.Key.Group, jobExecutionContext.JobDetail.Key.Name),
                     TriggerKey: new TriggerKeyDto(jobExecutionContext.Trigger.Key.Group, jobExecutionContext.Trigger.Key.Name),
                     FireTimeUtc: jobExecutionContext.FireTimeUtc,
-                    FireInstanceId: jobExecutionContext.FireInstanceId));
+                    FireInstanceId: jobExecutionContext.FireInstanceId,
+                    ExecutionGroup: jobExecutionContext.Trigger.ExecutionGroup));
         }
 
         return result;
@@ -244,16 +245,17 @@ public sealed class InProcessQuartzApiClient : IQuartzApiClient
         return scheduler.AddJob(jobDetail, request.Replace);
     }
 
-    public async ValueTask<List<TriggerKeyDto>> GetTriggerKeys(string schedulerName, string? groupFilter = null)
+    public async ValueTask<List<TriggerHeaderDto>> GetTriggerKeys(string schedulerName, string? groupFilter = null)
     {
         IScheduler scheduler = GetSchedulerOrThrow(schedulerName);
         GroupMatcher<TriggerKey> matcher = groupFilter is null ? GroupMatcher<TriggerKey>.AnyGroup() : GroupMatcher<TriggerKey>.GroupContains(groupFilter);
         List<TriggerKey> triggerKeys = await scheduler.GetTriggerKeys(matcher).ConfigureAwait(false);
 
-        List<TriggerKeyDto> result = [];
+        List<TriggerHeaderDto> result = [];
         foreach (TriggerKey triggerKey in triggerKeys)
         {
-            result.Add(new TriggerKeyDto(triggerKey.Group, triggerKey.Name));
+            ITrigger? trigger = await scheduler.GetTrigger(triggerKey).ConfigureAwait(false);
+            result.Add(new TriggerHeaderDto(triggerKey.Group, triggerKey.Name, trigger?.ExecutionGroup));
         }
 
         return result;
@@ -514,5 +516,33 @@ public sealed class InProcessQuartzApiClient : IQuartzApiClient
         }
 
         return "Unknown";
+    }
+
+    public async ValueTask<ExecutionLimitsDto?> GetExecutionLimits(string schedulerName)
+    {
+        IScheduler scheduler = GetSchedulerOrThrow(schedulerName);
+        try
+        {
+            ExecutionLimits? limits = await scheduler.GetExecutionLimits().ConfigureAwait(false);
+            if (limits is null || limits.Count == 0)
+            {
+                return null;
+            }
+
+            Dictionary<string, int?> dict = new();
+            foreach (KeyValuePair<string, int?> kvp in limits)
+            {
+                // Use display-friendly keys
+                string key = kvp.Key == ExecutionLimits.DefaultGroupKey ? "(default)" : kvp.Key;
+                dict[key] = kvp.Value;
+            }
+
+            return new ExecutionLimitsDto(dict);
+        }
+        catch (NotSupportedException)
+        {
+            // Scheduler implementation doesn't support execution limits (e.g. HTTP proxy)
+            return null;
+        }
     }
 }

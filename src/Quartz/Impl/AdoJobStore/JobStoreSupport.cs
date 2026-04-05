@@ -619,6 +619,7 @@ public abstract class JobStoreSupport : AdoConstants, IJobStore
                 throw new SchedulerException(error, ex);
             }
         }
+
     }
 
     /// <seealso cref="IJobStore.SchedulerStarted(CancellationToken)" />
@@ -3081,6 +3082,17 @@ public abstract class JobStoreSupport : AdoConstants, IJobStore
     /// <seealso cref="ReleaseAcquiredTrigger(IOperableTrigger, CancellationToken)" />
     public virtual ValueTask<List<IOperableTrigger>> AcquireNextTriggers(DateTimeOffset noLaterThan, int maxCount, TimeSpan timeWindow, CancellationToken cancellationToken = default)
     {
+        return AcquireNextTriggers(noLaterThan, maxCount, timeWindow, executionLimits: null, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public virtual ValueTask<List<IOperableTrigger>> AcquireNextTriggers(
+        DateTimeOffset noLaterThan,
+        int maxCount,
+        TimeSpan timeWindow,
+        Dictionary<string, int?>? executionLimits,
+        CancellationToken cancellationToken = default)
+    {
         string? lockName;
         if (AcquireTriggersWithinLock || maxCount > 1)
         {
@@ -3095,7 +3107,7 @@ public abstract class JobStoreSupport : AdoConstants, IJobStore
             OperationName.JobStore.AcquireNextTriggers,
             () => ExecuteInNonManagedTXLock(
                 lockName,
-                conn => AcquireNextTrigger(conn, noLaterThan, maxCount, timeWindow, cancellationToken), async (conn, result) =>
+                conn => AcquireNextTrigger(conn, noLaterThan, maxCount, timeWindow, executionLimits, cancellationToken), async (conn, result) =>
                 {
                     try
                     {
@@ -3127,11 +3139,22 @@ public abstract class JobStoreSupport : AdoConstants, IJobStore
     // TODO: this really ought to return something like a FiredTriggerBundle,
     // so that the fireInstanceId doesn't have to be on the trigger...
 
+    protected virtual ValueTask<List<IOperableTrigger>> AcquireNextTrigger(
+        ConnectionAndTransactionHolder conn,
+        DateTimeOffset noLaterThan,
+        int maxCount,
+        TimeSpan timeWindow,
+        CancellationToken cancellationToken = default)
+    {
+        return AcquireNextTrigger(conn, noLaterThan, maxCount, timeWindow, executionLimits: null, cancellationToken);
+    }
+
     protected virtual async ValueTask<List<IOperableTrigger>> AcquireNextTrigger(
         ConnectionAndTransactionHolder conn,
         DateTimeOffset noLaterThan,
         int maxCount,
         TimeSpan timeWindow,
+        Dictionary<string, int?>? executionLimits,
         CancellationToken cancellationToken = default)
     {
         if (timeWindow < TimeSpan.Zero)
@@ -3149,7 +3172,15 @@ public abstract class JobStoreSupport : AdoConstants, IJobStore
             currentLoopCount++;
             try
             {
-                var results = await Delegate.SelectTriggerToAcquire(conn, noLaterThan + timeWindow, MisfireTime, maxCount, cancellationToken).ConfigureAwait(false);
+                List<TriggerAcquireResult> results;
+                if (executionLimits is not null)
+                {
+                    results = await Delegate.SelectTriggerToAcquire(conn, noLaterThan + timeWindow, MisfireTime, maxCount, executionLimits, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    results = await Delegate.SelectTriggerToAcquire(conn, noLaterThan + timeWindow, MisfireTime, maxCount, cancellationToken).ConfigureAwait(false);
+                }
 
                 // No trigger is ready to fire yet.
                 if (results.Count == 0)

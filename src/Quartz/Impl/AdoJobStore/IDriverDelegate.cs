@@ -1132,18 +1132,24 @@ public interface IDriverDelegate
         string newState,
         DateTimeOffset? misfireOriginalFireTime,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Selects the next triggers to acquire, filtering by execution group constraints.
+    /// </summary>
+    /// <param name="conn">The DB connection.</param>
+    /// <param name="noLaterThan">Upper bound for next fire time.</param>
+    /// <param name="noEarlierThan">Lower bound for next fire time (typically misfire time).</param>
+    /// <param name="maxCount">Maximum number of triggers to return.</param>
+    /// <param name="executionLimits">Execution group available slots. Implementations must create
+    /// their own working copy before mutating — the caller may reuse this instance across retries.</param>
+    /// <param name="cancellationToken">The cancellation instruction.</param>
+    ValueTask<List<TriggerAcquireResult>> SelectTriggerToAcquire(
+        ConnectionAndTransactionHolder conn,
+        DateTimeOffset noLaterThan,
+        DateTimeOffset noEarlierThan,
+        int maxCount,
+        Dictionary<string, int?> executionLimits,
+        CancellationToken cancellationToken = default);
 }
 
-public class TriggerAcquireResult
-{
-    public TriggerAcquireResult(string triggerName, string triggerGroup, string jobType)
-    {
-        TriggerName = triggerName;
-        TriggerGroup = triggerGroup;
-        JobType = jobType;
-    }
-
-    public string TriggerName { get; }
-    public string TriggerGroup { get; }
-    public string JobType { get; }
-}
+public readonly record struct TriggerAcquireResult(string TriggerName, string TriggerGroup, string JobType, string? ExecutionGroup);
